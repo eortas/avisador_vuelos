@@ -1,0 +1,57 @@
+name: Comprobar precios de vuelos
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flight-price-check
+  cancel-in-progress: false
+
+jobs:
+  check-prices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ORIGIN: KRK
+      DESTINATION: BIO
+      DEPARTURE_MIN_DAYS: "30"
+      DEPARTURE_MAX_DAYS: "60"
+      MAX_STOPS: "1"
+      CURRENCY: EUR
+      ALERT_PERCENT: "8"
+      TREND_HOURS: "72"
+      TREND_POINTS: "3"
+      REQUEST_DELAY_SECONDS: "2"
+      MAX_DATES: "31"
+      DATABASE_PATH: data/one-way-prices.db
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Recuperar historico
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: flight-prices-${{ github.run_id }}
+          restore-keys: |
+            flight-prices-
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Consultar precios
+        run: python flight_tracker.py
