@@ -274,7 +274,14 @@ def telegram_request(
         with urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
-        raise RuntimeError(f"Telegram respondio con HTTP {error.code}") from error
+        try:
+            error_result = json.loads(error.read().decode("utf-8"))
+            description = error_result.get("description", "sin detalle")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            description = "sin detalle"
+        raise RuntimeError(
+            f"Telegram respondio con HTTP {error.code}: {description}"
+        ) from error
     except URLError as error:
         raise RuntimeError("No se pudo conectar con Telegram") from error
     if not result.get("ok"):
