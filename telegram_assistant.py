@@ -300,14 +300,13 @@ def get_updates(token: str, offset: int | None, timeout: int) -> list[dict]:
     return result.get("result", [])
 
 
-def send_reply(token: str, chat_id: str, text: str, message_id: int) -> None:
+def send_reply(token: str, chat_id: str, text: str) -> None:
     telegram_request(
         token,
         "sendMessage",
         {
             "chat_id": chat_id,
             "text": text,
-            "reply_parameters": {"message_id": message_id},
         },
     )
 
@@ -370,7 +369,6 @@ def process_update(
     message = update.get("message", {})
     chat_id = str(message.get("chat", {}).get("id", ""))
     text = message.get("text")
-    message_id = message.get("message_id")
     if chat_id != config.telegram_chat_id or not isinstance(text, str):
         return
 
@@ -390,7 +388,7 @@ def process_update(
             )
         except RuntimeError as error:
             answer = f"No he podido responder ahora: {error}"
-    send_reply(config.telegram_bot_token, chat_id, answer, message_id)
+    send_reply(config.telegram_bot_token, chat_id, answer)
 
 
 def run_bot(once: bool = False) -> None:
