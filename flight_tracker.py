@@ -494,6 +494,7 @@ def format_message(
     config: Config,
     quote: Quote,
     analysis: PriceAnalysis,
+    quotes: list[Quote] | None = None,
     forced: bool = False,
 ) -> str:
     if forced:
@@ -529,14 +530,23 @@ def format_message(
             f"Minimo historico: {format_amount(best_historical)} {config.currency}"
         )
 
-    lines.extend(
-        [
-            "",
-            "Mejor salida:",
-            quote.departure_date.strftime("%d/%m/%Y"),
-            quote.airlines or "Compania no indicada",
-        ]
-    )
+    best_quotes = sorted(
+        quotes or [quote],
+        key=lambda item: (item.price, item.departure_date),
+    )[:5]
+    lines.extend(["", f"{len(best_quotes)} mejores salidas:"])
+    for index, best_quote in enumerate(best_quotes, start=1):
+        if best_quote.stops == 0:
+            stops = "directo"
+        elif best_quote.stops == 1:
+            stops = "1 escala"
+        else:
+            stops = f"{best_quote.stops} escalas"
+        lines.append(
+            f"{index}. {best_quote.departure_date.strftime('%d/%m/%Y')} - "
+            f"{format_amount(best_quote.price)} {config.currency} - {stops} - "
+            f"{best_quote.airlines or 'Compania no indicada'}"
+        )
     return "\n".join(lines)
 
 
@@ -599,6 +609,7 @@ def run(
             config,
             cheapest,
             analysis,
+            quotes=quotes,
             forced=force_notify and not analysis.should_notify,
         )
         print("\n" + message)

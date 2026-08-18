@@ -147,6 +147,29 @@ class PriceAnalysisTests(unittest.TestCase):
 
         self.assertIn("Estado actual", message)
 
+    def test_message_shows_five_cheapest_departure_dates(self) -> None:
+        config = sample_config()
+        quotes = [
+            Quote(date(2026, 9, day), price, f"Airline {day}", day % 2)
+            for day, price in [
+                (10, 70),
+                (11, 45),
+                (12, 60),
+                (13, 40),
+                (14, 55),
+                (15, 50),
+            ]
+        ]
+        cheapest = min(quotes, key=lambda item: item.price)
+        analysis = self.analyse(40, 40, 35, [40])
+
+        message = format_message(config, cheapest, analysis, quotes=quotes)
+
+        self.assertIn("5 mejores salidas:", message)
+        self.assertIn("1. 13/09/2026 - 40 EUR", message)
+        self.assertIn("5. 12/09/2026 - 60 EUR", message)
+        self.assertNotIn("10/09/2026 - 70 EUR", message)
+
 
 class DatabaseTests(unittest.TestCase):
     def test_saves_run_and_all_quotes(self) -> None:

@@ -12,7 +12,7 @@ de cada ejecucion, guarda el historico en SQLite y avisa por Telegram cuando:
 Las subidas normales tienen un periodo de silencio de 12 horas. Los nuevos
 minimos y las subidas bruscas se notifican inmediatamente. Para evitar falsas
 alertas al mover la ventana de 30 a 60 dias, solo se comparan fechas presentes
-en ambas consultas.
+en ambas consultas. Cada aviso incluye las cinco fechas de salida mas baratas.
 
 El proyecto usa `flights`, una libreria no oficial que consulta la API interna de
 Google Flights. No necesita una API de pago, pero puede dejar de funcionar si
