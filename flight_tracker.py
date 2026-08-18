@@ -395,8 +395,15 @@ def save_run(
     return cheapest
 
 
-def format_message(config: Config, quote: Quote, analysis: PriceAnalysis) -> str:
-    if analysis.previous_price is None:
+def format_message(
+    config: Config,
+    quote: Quote,
+    analysis: PriceAnalysis,
+    forced: bool = False,
+) -> str:
+    if forced:
+        heading = "Estado actual"
+    elif analysis.previous_price is None:
         heading = "Seguimiento iniciado"
     elif analysis.is_new_historical_min:
         heading = "Nuevo minimo historico"
@@ -454,7 +461,11 @@ def send_telegram(token: str, chat_id: str, message: str) -> None:
         raise RuntimeError("No se pudo enviar el aviso por Telegram") from error
 
 
-def run(config: Config, no_notify: bool = False) -> Quote:
+def run(
+    config: Config,
+    no_notify: bool = False,
+    force_notify: bool = False,
+) -> Quote:
     checked_at = datetime.now(timezone.utc)
     quotes = collect_quotes(config)
     connection = connect_database(config.database_path)
@@ -474,19 +485,25 @@ def run(config: Config, no_notify: bool = False) -> Quote:
     finally:
         connection.close()
 
-    message = format_message(config, cheapest, analysis)
+    should_notify = analysis.should_notify or force_notify
+    message = format_message(
+        config,
+        cheapest,
+        analysis,
+        forced=force_notify and not analysis.should_notify,
+    )
     print("\n" + message)
     if (
-        analysis.should_notify
+        should_notify
         and not no_notify
         and config.telegram_bot_token
         and config.telegram_chat_id
     ):
         send_telegram(config.telegram_bot_token, config.telegram_chat_id, message)
         print("Aviso enviado por Telegram")
-    elif analysis.should_notify and no_notify:
+    elif should_notify and no_notify:
         print("Aviso omitido por --no-notify")
-    elif analysis.should_notify and not no_notify:
+    elif should_notify and not no_notify:
         print("Aviso no enviado: faltan las credenciales de Telegram")
     else:
         print("Sin cambios que requieran aviso")
@@ -504,6 +521,11 @@ def parse_args() -> argparse.Namespace:
         "--test-telegram",
         action="store_true",
         help="envia un mensaje de prueba sin consultar vuelos",
+    )
+    parser.add_argument(
+        "--force-notify",
+        action="store_true",
+        help="envia el estado actual aunque no haya cambios relevantes",
     )
     return parser.parse_args()
 
@@ -528,7 +550,11 @@ def main() -> int:
             f"Consultando {len(departure_dates)} fechas "
             f"para {config.origin} -> {config.destination}"
         )
-        run(config, no_notify=args.no_notify)
+        run(
+            config,
+            no_notify=args.no_notify,
+            force_notify=args.force_notify,
+        )
         return 0
     except (ValueError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)

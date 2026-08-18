@@ -2,8 +2,12 @@ name: Comprobar precios de vuelos
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 */6 * * *"
+    inputs:
+      force_notify:
+        description: Enviar el estado actual aunque no haya cambios
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -36,6 +40,14 @@ jobs:
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
+      - name: Validar secretos de Telegram
+        shell: bash
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "::error::Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en los secretos del repositorio"
+            exit 1
+          fi
+
       - name: Preparar Python
         uses: actions/setup-python@v5
         with:
@@ -54,4 +66,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Consultar precios
-        run: python flight_tracker.py
+        shell: bash
+        run: |
+          if [[ "${{ inputs.force_notify }}" == "true" ]]; then
+            python flight_tracker.py --force-notify
+          else
+            python flight_tracker.py
+          fi

@@ -11,6 +11,7 @@ from flight_tracker import (
     analyse_price,
     connect_database,
     format_amount,
+    format_message,
     generate_departure_dates,
     get_previous_prices,
     save_run,
@@ -82,6 +83,15 @@ class PriceAnalysisTests(unittest.TestCase):
     def test_formats_whole_and_decimal_prices(self) -> None:
         self.assertEqual(format_amount(144), "144")
         self.assertEqual(format_amount(144.5), "144.50")
+
+    def test_forced_message_shows_current_status(self) -> None:
+        config = sample_config()
+        quote = Quote(date(2026, 9, 10), 144, "Wizz Air", 0)
+        analysis = analyse_price(144, 144, 100, [144], 8, 3)
+
+        message = format_message(config, quote, analysis, forced=True)
+
+        self.assertIn("Estado actual", message)
 
 
 class DatabaseTests(unittest.TestCase):
