@@ -5,8 +5,14 @@ de cada ejecucion, guarda el historico en SQLite y avisa por Telegram cuando:
 
 - empieza el seguimiento;
 - aparece un nuevo minimo historico;
-- el minimo sube al menos el porcentaje configurado;
-- el precio sube durante varias consultas consecutivas.
+- el minimo supera durante dos consultas el minimo de las ultimas 24 horas en
+  al menos un 10 % y 5 EUR;
+- el minimo sube bruscamente al menos un 20 % y 10 EUR desde la consulta anterior.
+
+Las subidas normales tienen un periodo de silencio de 12 horas. Los nuevos
+minimos y las subidas bruscas se notifican inmediatamente. Para evitar falsas
+alertas al mover la ventana de 30 a 60 dias, solo se comparan fechas presentes
+en ambas consultas.
 
 El proyecto usa `flights`, una libreria no oficial que consulta la API interna de
 Google Flights. No necesita una API de pago, pero puede dejar de funcionar si
@@ -38,6 +44,33 @@ peticiones.
 6. Ejecuta `python flight_tracker.py` para consultar y enviar alertas.
 
 Los secretos no se guardan en Git porque `.env` esta ignorado.
+
+## Preguntas por Telegram con Mistral
+
+El bot tambien puede responder preguntas en lenguaje natural sobre las fechas y
+precios guardados de la ruta configurada. No consulta otras rutas y solo acepta
+mensajes del `TELEGRAM_CHAT_ID` definido en `.env`.
+
+1. Anade la clave de Mistral a `.env`:
+
+```text
+MISTRAL_API_KEY=tu_clave
+```
+
+2. Asegurate de haber ejecutado al menos una consulta de vuelos.
+3. Inicia el bot:
+
+```powershell
+python telegram_assistant.py
+```
+
+Mientras el proceso este abierto puedes escribir preguntas como `Que fechas hay
+por debajo de 50 EUR?`, `Cual es el sabado mas barato?` o `Ha subido el minimo?`.
+El comando `/estado` muestra el minimo actual sin consumir la API de Mistral.
+
+El trabajo horario de `cron-job.org` actualiza precios, pero no mantiene procesos
+abiertos. Puedes dejar `telegram_assistant.py` ejecutandose en un ordenador o
+servidor, o usar el workflow `answer-telegram.yml` descrito mas abajo.
 
 ## Ejecucion con cron-job.org y GitHub Actions
 
@@ -79,6 +112,26 @@ Content-Type: application/json
 
 El token de GitHub se guarda solamente en `cron-job.org`; no debe anadirse al
 repositorio ni confundirse con `TELEGRAM_BOT_TOKEN`.
+
+### Trabajo de cron para responder preguntas
+
+Crea un segundo trabajo en `cron-job.org`, por ejemplo cada 5 minutos, con las
+mismas cabeceras y esta URL:
+
+```text
+https://api.github.com/repos/eortas/avisador_vuelos/actions/workflows/answer-telegram.yml/dispatches
+```
+
+Usa este cuerpo, sin `inputs`:
+
+```json
+{"ref":"main"}
+```
+
+Antes de activarlo, crea tambien el secreto `MISTRAL_API_KEY` en **Settings >
+Secrets and variables > Actions**. Este segundo workflow no busca vuelos: lee la
+ultima base guardada y responde los mensajes pendientes. La respuesta puede
+tardar hasta la frecuencia configurada en cron-job.org.
 
 La carpeta `data` se conserva mediante la cache de Actions, sin publicar la base
 SQLite en el repositorio. La cache no es una copia de seguridad permanente;

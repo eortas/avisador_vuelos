@@ -23,8 +23,12 @@ class Config:
     max_stops: int
     currency: str
     alert_percent: float
-    trend_hours: int
-    trend_points: int
+    alert_amount: float
+    sharp_rise_percent: float
+    sharp_rise_amount: float
+    confirmation_checks: int
+    baseline_hours: int
+    cooldown_hours: int
     request_delay_seconds: float
     max_dates: int
     database_path: Path
@@ -43,20 +47,32 @@ class Quote:
 @dataclass(frozen=True)
 class PriceAnalysis:
     previous_price: float | None
+    baseline_price: float | None
     historical_min: float | None
     change_percent: float | None
     is_new_historical_min: bool
-    is_significant_rise: bool
-    is_sustained_rise: bool
+    is_confirmed_rise: bool
+    is_sharp_rise: bool
+    is_in_cooldown: bool
 
     @property
     def should_notify(self) -> bool:
         return (
-            self.previous_price is None
+            self.historical_min is None
             or self.is_new_historical_min
-            or self.is_significant_rise
-            or self.is_sustained_rise
+            or self.is_sharp_rise
+            or (self.is_confirmed_rise and not self.is_in_cooldown)
         )
+
+    @property
+    def notification_reason(self) -> str:
+        if self.historical_min is None:
+            return "tracking_started"
+        if self.is_new_historical_min:
+            return "historical_min"
+        if self.is_sharp_rise:
+            return "sharp_rise"
+        return "confirmed_rise"
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
@@ -88,9 +104,13 @@ def load_config() -> Config:
         departure_end=today + timedelta(days=max_days),
         max_stops=int(os.getenv("MAX_STOPS", "1")),
         currency=os.getenv("CURRENCY", "EUR").upper(),
-        alert_percent=float(os.getenv("ALERT_PERCENT", "8")),
-        trend_hours=int(os.getenv("TREND_HOURS", "72")),
-        trend_points=int(os.getenv("TREND_POINTS", "3")),
+        alert_percent=float(os.getenv("ALERT_PERCENT", "10")),
+        alert_amount=float(os.getenv("ALERT_AMOUNT", "5")),
+        sharp_rise_percent=float(os.getenv("SHARP_RISE_PERCENT", "20")),
+        sharp_rise_amount=float(os.getenv("SHARP_RISE_AMOUNT", "10")),
+        confirmation_checks=int(os.getenv("CONFIRMATION_CHECKS", "2")),
+        baseline_hours=int(os.getenv("BASELINE_HOURS", "24")),
+        cooldown_hours=int(os.getenv("COOLDOWN_HOURS", "12")),
         request_delay_seconds=float(os.getenv("REQUEST_DELAY_SECONDS", "2")),
         max_dates=int(os.getenv("MAX_DATES", "31")),
         database_path=Path(os.getenv("DATABASE_PATH", "data/one-way-prices.db")),
@@ -108,10 +128,17 @@ def validate_config(config: Config) -> None:
         raise ValueError("La fecha inicial no puede ser posterior a la final")
     if not 0 <= config.max_stops <= 2:
         raise ValueError("MAX_STOPS debe estar entre 0 y 2")
-    if config.alert_percent < 0:
-        raise ValueError("ALERT_PERCENT no puede ser negativo")
-    if config.trend_points < 2:
-        raise ValueError("TREND_POINTS debe ser al menos 2")
+    if min(
+        config.alert_percent,
+        config.alert_amount,
+        config.sharp_rise_percent,
+        config.sharp_rise_amount,
+    ) < 0:
+        raise ValueError("Los umbrales de alerta no pueden ser negativos")
+    if config.confirmation_checks < 2:
+        raise ValueError("CONFIRMATION_CHECKS debe ser al menos 2")
+    if config.baseline_hours < 1 or config.cooldown_hours < 0:
+        raise ValueError("BASELINE_HOURS debe ser positivo y COOLDOWN_HOURS no negativo")
     if config.max_dates < 1:
         raise ValueError("MAX_DATES debe ser al menos 1")
     if bool(config.telegram_bot_token) != bool(config.telegram_chat_id):
@@ -260,6 +287,14 @@ def connect_database(path: Path) -> sqlite3.Connection:
             stops INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
+            sent_at TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            price REAL NOT NULL
+        );
+
         """
     )
     columns = {
@@ -279,20 +314,13 @@ def connect_database(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def get_previous_prices(
+def get_price_history(
     connection: sqlite3.Connection,
     config: Config,
     checked_at: datetime,
-) -> tuple[float | None, float | None, list[float]]:
+    departure_dates: list[date],
+) -> tuple[float | None, float | None, list[float], datetime | None]:
     route = (config.origin, config.destination)
-    previous_row = connection.execute(
-        """
-        SELECT min_price FROM runs
-        WHERE origin = ? AND destination = ? AND trip_type = 'one-way'
-        ORDER BY checked_at DESC LIMIT 1
-        """,
-        route,
-    ).fetchone()
     historical_row = connection.execute(
         """
         SELECT MIN(min_price) AS min_price FROM runs
@@ -300,21 +328,42 @@ def get_previous_prices(
         """,
         route,
     ).fetchone()
-    cutoff = (checked_at - timedelta(hours=config.trend_hours)).isoformat()
+    cutoff = (checked_at - timedelta(hours=config.baseline_hours)).isoformat()
+    placeholders = ", ".join("?" for _ in departure_dates)
     recent_rows = connection.execute(
-        """
-        SELECT min_price FROM runs
-        WHERE origin = ? AND destination = ? AND trip_type = 'one-way'
-          AND checked_at >= ?
-        ORDER BY checked_at DESC LIMIT ?
+        f"""
+        SELECT r.checked_at, MIN(q.price) AS min_price
+        FROM runs AS r
+        JOIN quotes AS q ON q.run_id = r.id
+        WHERE r.origin = ? AND r.destination = ? AND r.trip_type = 'one-way'
+          AND r.checked_at >= ?
+          AND q.departure_date IN ({placeholders})
+        GROUP BY r.id, r.checked_at
+        ORDER BY r.checked_at
         """,
-        (*route, cutoff, config.trend_points - 1),
+        (*route, cutoff, *(day.isoformat() for day in departure_dates)),
     ).fetchall()
+    notification_row = connection.execute(
+        """
+        SELECT n.sent_at
+        FROM notifications AS n
+        JOIN runs AS r ON r.id = n.run_id
+        WHERE r.origin = ? AND r.destination = ? AND r.trip_type = 'one-way'
+          AND n.reason != 'forced'
+        ORDER BY n.sent_at DESC LIMIT 1
+        """,
+        route,
+    ).fetchone()
 
-    previous = previous_row["min_price"] if previous_row else None
     historical = historical_row["min_price"] if historical_row else None
-    recent = [row["min_price"] for row in reversed(recent_rows)]
-    return previous, historical, recent
+    recent = [row["min_price"] for row in recent_rows]
+    previous = recent[-1] if recent else None
+    last_notification_at = (
+        datetime.fromisoformat(notification_row["sent_at"])
+        if notification_row
+        else None
+    )
+    return previous, historical, recent, last_notification_at
 
 
 def analyse_price(
@@ -323,25 +372,54 @@ def analyse_price(
     historical_min: float | None,
     recent_prices: list[float],
     alert_percent: float,
-    trend_points: int,
+    alert_amount: float,
+    sharp_rise_percent: float,
+    sharp_rise_amount: float,
+    confirmation_checks: int,
+    checked_at: datetime,
+    last_notification_at: datetime | None,
+    cooldown_hours: int,
 ) -> PriceAnalysis:
     change_percent = None
     if previous_price:
         change_percent = (current_price - previous_price) / previous_price * 100
 
-    trend = [*recent_prices, current_price]
-    sustained = (
-        len(trend) >= trend_points
-        and all(previous < current for previous, current in zip(trend, trend[1:]))
-        and (trend[-1] - trend[0]) / trend[0] * 100 >= alert_percent
+    baseline_price = min(recent_prices) if recent_prices else None
+
+    def exceeds_threshold(price: float, baseline: float) -> bool:
+        increase_percent = (price - baseline) / baseline * 100
+        return increase_percent >= alert_percent and price - baseline >= alert_amount
+
+    confirmed_prices = [
+        *recent_prices[-(confirmation_checks - 1) :],
+        current_price,
+    ]
+    confirmed_rise = (
+        baseline_price is not None
+        and len(confirmed_prices) == confirmation_checks
+        and all(
+            exceeds_threshold(price, baseline_price) for price in confirmed_prices
+        )
+    )
+    sharp_rise = (
+        previous_price is not None
+        and change_percent is not None
+        and change_percent >= sharp_rise_percent
+        and current_price - previous_price >= sharp_rise_amount
+    )
+    in_cooldown = (
+        last_notification_at is not None
+        and checked_at - last_notification_at < timedelta(hours=cooldown_hours)
     )
     return PriceAnalysis(
         previous_price=previous_price,
+        baseline_price=baseline_price,
         historical_min=historical_min,
         change_percent=change_percent,
         is_new_historical_min=historical_min is not None and current_price < historical_min,
-        is_significant_rise=change_percent is not None and change_percent >= alert_percent,
-        is_sustained_rise=sustained,
+        is_confirmed_rise=confirmed_rise,
+        is_sharp_rise=sharp_rise,
+        is_in_cooldown=in_cooldown,
     )
 
 
@@ -350,7 +428,7 @@ def save_run(
     config: Config,
     checked_at: datetime,
     quotes: list[Quote],
-) -> Quote:
+) -> tuple[Quote, int]:
     cheapest = min(quotes, key=lambda quote: quote.price)
     with connection:
         cursor = connection.execute(
@@ -392,7 +470,24 @@ def save_run(
                 for quote in quotes
             ],
         )
-    return cheapest
+    return cheapest, run_id
+
+
+def mark_notification(
+    connection: sqlite3.Connection,
+    run_id: int,
+    sent_at: datetime,
+    reason: str,
+    price: float,
+) -> None:
+    with connection:
+        connection.execute(
+            """
+            INSERT INTO notifications (run_id, sent_at, reason, price)
+            VALUES (?, ?, ?, ?)
+            """,
+            (run_id, sent_at.isoformat(), reason, price),
+        )
 
 
 def format_message(
@@ -403,14 +498,14 @@ def format_message(
 ) -> str:
     if forced:
         heading = "Estado actual"
-    elif analysis.previous_price is None:
+    elif analysis.historical_min is None:
         heading = "Seguimiento iniciado"
     elif analysis.is_new_historical_min:
         heading = "Nuevo minimo historico"
-    elif analysis.is_sustained_rise:
-        heading = "El precio lleva varias consultas subiendo"
+    elif analysis.is_sharp_rise:
+        heading = "Subida brusca del precio minimo"
     else:
-        heading = "El precio minimo ha subido"
+        heading = "Subida confirmada del precio minimo"
 
     lines = [
         f"{config.origin} -> {config.destination}",
@@ -420,8 +515,13 @@ def format_message(
     ]
     if analysis.previous_price is not None and analysis.change_percent is not None:
         lines.append(
-            f"Anterior: {format_amount(analysis.previous_price)} {config.currency} "
+            f"Consulta anterior: {format_amount(analysis.previous_price)} {config.currency} "
             f"({analysis.change_percent:+.1f} %)"
+        )
+    if analysis.baseline_price is not None:
+        lines.append(
+            f"Minimo ultimas {config.baseline_hours} h: "
+            f"{format_amount(analysis.baseline_price)} {config.currency}"
         )
     if analysis.historical_min is not None:
         best_historical = min(analysis.historical_min, quote.price)
@@ -471,7 +571,12 @@ def run(
     connection = connect_database(config.database_path)
 
     try:
-        previous, historical, recent = get_previous_prices(connection, config, checked_at)
+        previous, historical, recent, last_notification_at = get_price_history(
+            connection,
+            config,
+            checked_at,
+            [quote.departure_date for quote in quotes],
+        )
         cheapest = min(quotes, key=lambda quote: quote.price)
         analysis = analyse_price(
             current_price=cheapest.price,
@@ -479,35 +584,43 @@ def run(
             historical_min=historical,
             recent_prices=recent,
             alert_percent=config.alert_percent,
-            trend_points=config.trend_points,
+            alert_amount=config.alert_amount,
+            sharp_rise_percent=config.sharp_rise_percent,
+            sharp_rise_amount=config.sharp_rise_amount,
+            confirmation_checks=config.confirmation_checks,
+            checked_at=checked_at,
+            last_notification_at=last_notification_at,
+            cooldown_hours=config.cooldown_hours,
         )
-        save_run(connection, config, checked_at, quotes)
+        cheapest, run_id = save_run(connection, config, checked_at, quotes)
+
+        should_notify = analysis.should_notify or force_notify
+        message = format_message(
+            config,
+            cheapest,
+            analysis,
+            forced=force_notify and not analysis.should_notify,
+        )
+        print("\n" + message)
+        if (
+            should_notify
+            and not no_notify
+            and config.telegram_bot_token
+            and config.telegram_chat_id
+        ):
+            send_telegram(config.telegram_bot_token, config.telegram_chat_id, message)
+            reason = analysis.notification_reason if analysis.should_notify else "forced"
+            mark_notification(connection, run_id, checked_at, reason, cheapest.price)
+            print("Aviso enviado por Telegram")
+        elif should_notify and no_notify:
+            print("Aviso omitido por --no-notify")
+        elif should_notify and not no_notify:
+            print("Aviso no enviado: faltan las credenciales de Telegram")
+        else:
+            print("Sin cambios que requieran aviso")
+        return cheapest
     finally:
         connection.close()
-
-    should_notify = analysis.should_notify or force_notify
-    message = format_message(
-        config,
-        cheapest,
-        analysis,
-        forced=force_notify and not analysis.should_notify,
-    )
-    print("\n" + message)
-    if (
-        should_notify
-        and not no_notify
-        and config.telegram_bot_token
-        and config.telegram_chat_id
-    ):
-        send_telegram(config.telegram_bot_token, config.telegram_chat_id, message)
-        print("Aviso enviado por Telegram")
-    elif should_notify and no_notify:
-        print("Aviso omitido por --no-notify")
-    elif should_notify and not no_notify:
-        print("Aviso no enviado: faltan las credenciales de Telegram")
-    else:
-        print("Sin cambios que requieran aviso")
-    return cheapest
 
 
 def parse_args() -> argparse.Namespace:

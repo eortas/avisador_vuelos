@@ -1,0 +1,57 @@
+name: Responder preguntas de Telegram
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flight-price-data
+  cancel-in-progress: false
+
+jobs:
+  answer-telegram:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ORIGIN: KRK
+      DESTINATION: BIO
+      DEPARTURE_MIN_DAYS: "30"
+      DEPARTURE_MAX_DAYS: "60"
+      MAX_STOPS: "1"
+      CURRENCY: EUR
+      DATABASE_PATH: data/one-way-prices.db
+      MISTRAL_MODEL: mistral-small-latest
+      CHAT_HISTORY_MESSAGES: "0"
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Validar secretos
+        shell: bash
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" || -z "$MISTRAL_API_KEY" ]]; then
+            echo "::error::Faltan secretos de Telegram o MISTRAL_API_KEY"
+            exit 1
+          fi
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Recuperar ultimo historico de vuelos
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: telegram-prices-${{ github.run_id }}
+          restore-keys: |
+            flight-prices-
+
+      - name: Responder mensajes pendientes
+        run: python telegram_assistant.py --once
