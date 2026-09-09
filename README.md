@@ -1,4 +1,4 @@
-# Avisador de precios KRK - BIO de solo ida
+# Avisador de vuelos y stock
 
 Consulta Google Flights para todas las salidas entre 30 y 60 dias desde la fecha
 de cada ejecucion, guarda el historico en SQLite y avisa por Telegram cuando:
@@ -17,6 +17,32 @@ en ambas consultas. Cada aviso incluye las cinco fechas de salida mas baratas.
 El proyecto usa `flights`, una libreria no oficial que consulta la API interna de
 Google Flights. No necesita una API de pago, pero puede dejar de funcionar si
 Google cambia ese servicio.
+
+## Stock de Nintendo Switch 2 en MediaMarkt
+
+El archivo `stock_tracker.py` comprueba la ficha de la Switch 2 Edicion Zelda
+40 Aniversario de MediaMarkt. Guarda el estado en una base SQLite separada y
+envia un mensaje por Telegram cuando detecta que vuelve a estar disponible. La
+primera consulta solo avisa si ya hay stock. Los estados ambiguos o de
+"Disponible proximamente" no generan alertas.
+
+La URL y el nombre se pueden cambiar en `.env` con `STOCK_PRODUCT_URL` y
+`STOCK_PRODUCT_NAME`. Para comprobarlo en local sin mandar mensajes:
+
+```powershell
+python stock_tracker.py --no-notify
+```
+
+Para recibir el estado actual aunque no haya habido cambio, ejecuta:
+
+```powershell
+python stock_tracker.py --force-notify
+```
+
+El workflow `Comprobar stock de Switch 2` se ejecuta cada 15 minutos en GitHub
+Actions y comparte los secretos `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` con
+el avisador de vuelos. Su base de datos se conserva mediante la cache de
+Actions, igual que el historico de vuelos.
 
 ## Uso local
 
