@@ -43,6 +43,11 @@ class PageAvailabilityTests(unittest.TestCase):
 
         self.assertFalse(page_availability(page))
 
+    def test_detects_game_coming_soon_as_unavailable(self) -> None:
+        page = "<p>PRÓXIMAMENTE</p><a>Avísame cuando esté disponible en web</a>"
+
+        self.assertFalse(page_availability(page))
+
     def test_rejects_an_ambiguous_page(self) -> None:
         self.assertIsNone(page_availability("<p>Ficha de producto</p>"))
 
@@ -80,6 +85,20 @@ class StockDatabaseTests(unittest.TestCase):
             )
 
             self.assertIn("Sin stock", message)
+
+    def test_message_shows_the_game_store(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = StockConfig(
+                product_url="https://www.game.es/switch-2.html",
+                product_name="Nintendo Switch 2",
+                database_path=Path(directory) / "stock.db",
+                telegram_bot_token=None,
+                telegram_chat_id=None,
+            )
+
+            message = format_message(config, False)
+
+            self.assertIn("Estado en GAME", message)
 
 
 if __name__ == "__main__":

@@ -18,16 +18,17 @@ El proyecto usa `flights`, una libreria no oficial que consulta la API interna d
 Google Flights. No necesita una API de pago, pero puede dejar de funcionar si
 Google cambia ese servicio.
 
-## Stock de Nintendo Switch 2 en MediaMarkt
+## Stock de Nintendo Switch 2 en MediaMarkt y GAME
 
-El archivo `stock_tracker.py` comprueba la ficha de la Switch 2 Edicion Zelda
-40 Aniversario de MediaMarkt. Guarda el estado en una base SQLite separada y
-envia un mensaje por Telegram cuando detecta que vuelve a estar disponible. La
-primera consulta solo avisa si ya hay stock. Los estados ambiguos o de
-"Disponible proximamente" no generan alertas.
+El archivo `stock_tracker.py` comprueba las fichas de la Switch 2 Edicion Zelda
+40 Aniversario de MediaMarkt y GAME. Guarda cada estado en una base SQLite
+separada y envia un mensaje por Telegram cuando detecta que vuelve a estar
+disponible. La primera consulta solo avisa si ya hay stock. Los estados ambiguos
+o de "Disponible proximamente" no generan alertas.
 
-La URL y el nombre se pueden cambiar en `.env` con `STOCK_PRODUCT_URL` y
-`STOCK_PRODUCT_NAME`. Para comprobarlo en local sin mandar mensajes:
+Las URL y los nombres se pueden cambiar en `.env` con las variables
+`STOCK_PRODUCT_URL`, `STOCK_PRODUCT_NAME`, `GAME_PRODUCT_URL` y
+`GAME_PRODUCT_NAME`. Para comprobarlo en local sin mandar mensajes:
 
 ```powershell
 python stock_tracker.py --no-notify

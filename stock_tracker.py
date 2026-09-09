@@ -24,6 +24,11 @@ DEFAULT_PRODUCT_URL = (
     "modo-raton-bateria-extraible-1674231.html"
 )
 DEFAULT_PRODUCT_NAME = "Nintendo Switch 2 - Edicion Zelda 40 Aniversario"
+DEFAULT_GAME_PRODUCT_URL = (
+    "https://www.game.es/nintendo-switch-2-edicion-zelda-40th-nintendo-switch-2-"
+    "267689"
+)
+DEFAULT_GAME_PRODUCT_NAME = "Nintendo Switch 2 Edicion Zelda 40th"
 
 
 @dataclass(frozen=True)
@@ -86,10 +91,24 @@ def load_config() -> StockConfig:
     return config
 
 
+def load_stock_configs() -> tuple[StockConfig, StockConfig]:
+    media_markt = load_config()
+    game = StockConfig(
+        product_url=os.getenv("GAME_PRODUCT_URL", DEFAULT_GAME_PRODUCT_URL),
+        product_name=os.getenv("GAME_PRODUCT_NAME", DEFAULT_GAME_PRODUCT_NAME),
+        database_path=media_markt.database_path,
+        telegram_bot_token=media_markt.telegram_bot_token,
+        telegram_chat_id=media_markt.telegram_chat_id,
+    )
+    validate_config(game)
+    return media_markt, game
+
+
 def validate_config(config: StockConfig) -> None:
     parsed_url = urlparse(config.product_url)
-    if parsed_url.scheme != "https" or not parsed_url.netloc.endswith("mediamarkt.es"):
-        raise ValueError("STOCK_PRODUCT_URL debe ser una URL HTTPS de MediaMarkt")
+    valid_hosts = ("mediamarkt.es", "game.es")
+    if parsed_url.scheme != "https" or not parsed_url.netloc.endswith(valid_hosts):
+        raise ValueError("La URL de stock debe ser HTTPS de MediaMarkt o GAME")
     if not config.product_name.strip():
         raise ValueError("STOCK_PRODUCT_NAME no puede estar vacio")
     if bool(config.telegram_bot_token) != bool(config.telegram_chat_id):
@@ -109,9 +128,9 @@ def fetch_product_page(product_url: str) -> str:
             charset = response.headers.get_content_charset() or "utf-8"
             return response.read().decode(charset, errors="replace")
     except HTTPError as error:
-        raise RuntimeError(f"MediaMarkt respondio con HTTP {error.code}") from error
+        raise RuntimeError(f"La tienda respondio con HTTP {error.code}") from error
     except URLError as error:
-        raise RuntimeError("No se pudo consultar la ficha de MediaMarkt") from error
+        raise RuntimeError("No se pudo consultar la ficha de la tienda") from error
 
 
 def get_json_ld_documents(page: str) -> list[Any]:
@@ -166,7 +185,9 @@ def page_availability(page: str) -> bool | None:
     text = visible_text(page)
     unavailable_markers = (
         "disponible proximamente",
+        "proximamente",
         "crear alerta de disponibilidad",
+        "avisame cuando este disponible",
         "agotado",
         "sin stock",
         "no disponible online",
@@ -289,11 +310,13 @@ def format_message(config: StockConfig, is_available: bool, forced: bool = False
     else:
         heading = "Sin stock"
     status = "Disponible" if is_available else "No disponible"
+    host = urlparse(config.product_url).netloc.lower()
+    store = "GAME" if host.endswith("game.es") else "MediaMarkt"
     return "\n".join(
         [
             heading,
             config.product_name,
-            f"Estado en MediaMarkt: {status}",
+            f"Estado en {store}: {status}",
             config.product_url,
         ]
     )
@@ -352,7 +375,7 @@ def run(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Avisador de stock de MediaMarkt")
+    parser = argparse.ArgumentParser(description="Avisador de stock de Switch 2")
     parser.add_argument(
         "--no-notify",
         action="store_true",
@@ -368,16 +391,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    exit_code = 0
     try:
-        run(
-            load_config(),
-            no_notify=args.no_notify,
-            force_notify=args.force_notify,
-        )
-        return 0
+        configs = load_stock_configs()
     except (ValueError, RuntimeError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
+
+    for config in configs:
+        try:
+            run(
+                config,
+                no_notify=args.no_notify,
+                force_notify=args.force_notify,
+            )
+        except (ValueError, RuntimeError) as error:
+            print(f"Error: {error}", file=sys.stderr)
+            exit_code = 1
+    return exit_code
 
 
 if __name__ == "__main__":
