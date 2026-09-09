@@ -39,8 +39,12 @@ Para recibir el estado actual aunque no haya habido cambio, ejecuta:
 python stock_tracker.py --force-notify
 ```
 
-El workflow `Comprobar stock de Switch 2` se ejecuta cada 15 minutos en GitHub
-Actions y comparte los secretos `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` con
+El workflow `answer-telegram.yml` que ya dispara `cron-job.org` ahora lanza
+tambien esta comprobacion de stock en paralelo. No hay que cambiar su URL,
+frecuencia ni cuerpo JSON: el stock se revisara con la misma frecuencia que ese
+trabajo (cada minuto con la configuracion actual).
+
+El workflow comparte los secretos `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` con
 el avisador de vuelos. Su base de datos se conserva mediante la cache de
 Actions, igual que el historico de vuelos.
 

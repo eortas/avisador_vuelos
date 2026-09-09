@@ -6,14 +6,13 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: flight-price-data
-  cancel-in-progress: false
-
 jobs:
   answer-telegram:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: flight-price-data
+      cancel-in-progress: false
     env:
       ORIGIN: KRK
       DESTINATION: BIO
@@ -55,3 +54,44 @@ jobs:
 
       - name: Responder mensajes pendientes
         run: python telegram_assistant.py --once
+
+  check-stock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: switch-2-stock-data
+      cancel-in-progress: false
+    env:
+      STOCK_PRODUCT_URL: https://www.mediamarkt.es/es/product/_consola-nintendo-switch-2-edicion-zelda-40-aniversario-79-full-hd-hdr-120-hz-256-gb-magnetic-joy-con-2-con-modo-raton-bateria-extraible-1674231.html
+      STOCK_PRODUCT_NAME: Nintendo Switch 2 - Edicion Zelda 40 Aniversario
+      STOCK_DATABASE_PATH: data/stock-status.db
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Validar secretos de Telegram
+        shell: bash
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "::error::Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en los secretos del repositorio"
+            exit 1
+          fi
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Recuperar historico de stock
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: switch-2-stock-${{ github.run_id }}
+          restore-keys: |
+            switch-2-stock-
+
+      - name: Consultar stock
+        run: python stock_tracker.py
